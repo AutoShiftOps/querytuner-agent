@@ -1,0 +1,6 @@
+# Demo-only UI layer (streamlit_app.py) — deliberately kept out of
+# requirements.txt so the Cloud Run production image (built from that
+# file via the Dockerfile) never pulls in Streamlit. Install these only
+# for running the local demo UI.
+streamlit==1.41.1
+requests==2.32.5

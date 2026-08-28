@@ -166,6 +166,39 @@ curl -X POST http://localhost:8080/jobs -H "Content-Type: application/json" -d '
 }'
 ```
 
+## Demo UI (`streamlit_app.py`)
+
+The API above is the real product surface, but curl isn't much of a demo.
+`streamlit_app.py` is a thin browser UI over the same `POST /jobs` /
+`GET /jobs/{id}` calls — it renders whatever the API actually returns
+(triage priorities color-coded, reconciled index suggestions as
+copy-pasteable `CREATE INDEX` statements, the executive summary,
+progress bar while polling), nothing is mocked for it. It's a demo/local
+convenience only — kept out of `requirements.txt` and the Docker image on
+purpose, in its own `requirements-streamlit.txt`.
+
+```bash
+# in one terminal — the real API, same as above
+uvicorn main:app --reload --port 8080
+
+# in a second terminal
+pip install -r requirements-streamlit.txt
+streamlit run streamlit_app.py
+```
+
+Opens at `http://localhost:8501`. To point it at a deployed API instead
+of localhost, set `API_BASE_URL` (or just type the URL into the sidebar
+field once the page is open):
+```bash
+API_BASE_URL=https://queryagent-api-xxxx-uc.a.run.app streamlit run streamlit_app.py
+```
+
+Verified headlessly in this environment via Streamlit's own `AppTest`
+framework (no browser needed to check for runtime errors): both single-
+query and batch mode submit, poll, and render a complete result with
+zero exceptions, against a real `DRY_RUN=true` API instance — the same
+discipline used throughout this README, not just "should work."
+
 ## Deploying to Cloud Run + Cloud Tasks
 
 ```bash
@@ -335,4 +368,7 @@ submission's hosted-URL and demo video requirements are met.
    project; use the Vertex AI variant instead of `GEMINI_API_KEY` for the
    strongest native-GCP story if pursuing that for judging.
 5. Confirm `GET /jobs/{job_id}` polling works end-to-end against the
-   deployed URL, then use that URL for the submission's demo video.
+   deployed URL.
+6. Point `streamlit_app.py` at that URL (`API_BASE_URL=<deployed url>
+   streamlit run streamlit_app.py`) and use the browser UI — not curl —
+   for the submission's demo video.
