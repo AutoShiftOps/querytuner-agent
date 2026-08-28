@@ -1,0 +1,18 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.5
+
+# Analysis engine (vendored from AutoShiftOps/querytuner) dependencies
+sqlparse==0.5.3
+
+# Google Cloud
+google-cloud-firestore==2.20.1
+google-cloud-tasks==2.19.3
+
+# Google AI stack — the only AI SDK anywhere in this project. Used via
+# google-adk's LlmAgent/Runner (adk_agents.py) — google-genai is ADK's own
+# transitive dependency for the underlying Gemini/Vertex client, pinned
+# explicitly here since gemini_agent.py's credential-mode detection logic
+# also imports its `types` module directly.
+google-adk==2.8.0
+google-genai==2.20.0
