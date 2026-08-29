@@ -29,52 +29,36 @@ Application Default Credentials, the more "native GCP" of the two). See
 ## Architecture
 
 ```mermaid
-flowchart TB
+flowchart TD
     client(["Client"])
 
-    subgraph pub ["Cloud Run &nbsp;·&nbsp; public API"]
-        api["<b>main.py</b><br/>validate &nbsp;·&nbsp; create job &nbsp;·&nbsp; enqueue &nbsp;·&nbsp; return job_id"]
+    subgraph pub ["Cloud Run &nbsp;&middot;&nbsp; public API"]
+        api["<b>main.py</b><br/>validate &middot; create job &middot; enqueue &middot; return job_id"]
     end
 
     queue[["Cloud Tasks queue"]]
 
-    subgraph wrk ["Cloud Run &nbsp;·&nbsp; worker &nbsp;—&nbsp; no public invoker (Cloud Tasks SA only)"]
-        worker["<b>worker.py</b> &nbsp;·&nbsp; POST /tasks/run-pipeline"]
-        subgraph pipe ["gemini_agent.run_pipeline(job_id)"]
+    subgraph wrk ["Cloud Run &nbsp;&middot;&nbsp; worker &nbsp;&mdash;&nbsp; private, Cloud Tasks only"]
+        worker["<b>worker.py</b><br/>POST /tasks/run-pipeline"]
+        subgraph pipe ["gemini_agent.run_pipeline &nbsp;&mdash;&nbsp; steps 1&middot;2&middot;4 call the model via adk_agents.py (ADK LlmAgent + InMemoryRunner)"]
             direction TB
-            p1["<b>1 · plan</b> &nbsp;—&nbsp; Gemini"]
-            p2["<b>2 · triage</b> &nbsp;—&nbsp; Gemma"]
-            p3["<b>3 · analyze</b> &nbsp;—&nbsp; analysis_engine/<br/>heuristics + EXPLAIN cross-ref &nbsp;·&nbsp; no AI"]
-            p4["<b>4 · explain</b> &nbsp;—&nbsp; Gemini"]
+            p1["<b>1 &middot; plan</b> &nbsp;&mdash;&nbsp; Gemini"]
+            p2["<b>2 &middot; triage</b> &nbsp;&mdash;&nbsp; Gemma"]
+            p3["<b>3 &middot; analyze</b> &nbsp;&mdash;&nbsp; analysis_engine/ &nbsp;&middot;&nbsp; deterministic, no AI"]
+            p4["<b>4 &middot; explain</b> &nbsp;&mdash;&nbsp; Gemini"]
             p1 --> p2 --> p3 --> p4
         end
-        adk["<b>adk_agents.py</b><br/>ADK LlmAgent + InMemoryRunner"]
         worker --> p1
-        p1 -. via .-> adk
-        p2 -. via .-> adk
-        p4 -. via .-> adk
     end
 
-    fs[("Firestore &nbsp;·&nbsp; job doc<br/>status · progress · result")]
+    fs[("Firestore &nbsp;&middot;&nbsp; job doc<br/>status &middot; progress &middot; result")]
 
-    client -- "POST /jobs &nbsp;·&nbsp; GET /jobs/{id} (poll)" --> api
-    api -- "job_id → status → result" --> client
-    api -- "enqueue" --> queue
-    queue -- "HTTP push &nbsp;·&nbsp; OIDC auth" --> worker
-    api -- "create / read job" --> fs
-    p4 -- "progress + result, after every step" --> fs
-
-    classDef service fill:#E8F0FE,stroke:#1A73E8,color:#202124
-    classDef managed fill:#FEF7E0,stroke:#F9AB00,color:#202124
-    classDef ai fill:#E6F4EA,stroke:#188038,color:#202124
-    classDef plain fill:#F1F3F4,stroke:#5F6368,color:#202124
-    class api,worker service
-    class queue,fs managed
-    class adk,p1,p2,p4 ai
-    class p3,client plain
-    style pub fill:#F8FAFF,stroke:#C6DAFC
-    style wrk fill:#FFFDF5,stroke:#FDE293
-    style pipe fill:#FFFFFF,stroke:#DADCE0
+    client -->|"POST /jobs &nbsp;&rarr;&nbsp; job_id"| api
+    client -->|"GET /jobs/{id} &nbsp;&middot;&nbsp; poll"| api
+    api -->|"enqueue"| queue
+    queue -->|"HTTP push &nbsp;&middot;&nbsp; OIDC"| worker
+    api -->|"create / read job"| fs
+    p4 -->|"progress + result,<br/>after every step"| fs
 ```
 
 Two Cloud Run services, one Firestore collection, one Cloud Tasks queue.
