@@ -32,33 +32,32 @@ Application Default Credentials, the more "native GCP" of the two). See
 flowchart TD
     client(["Client"])
 
-    subgraph pub ["Cloud Run &nbsp;&middot;&nbsp; public API"]
-        api["<b>main.py</b><br/>validate &middot; create job &middot; enqueue &middot; return job_id"]
+    subgraph pub ["Cloud Run &mdash; public API"]
+        api["<b>main.py</b><br/>validate, create job, enqueue,<br/>return job_id"]
     end
 
     queue[["Cloud Tasks queue"]]
 
-    subgraph wrk ["Cloud Run &nbsp;&middot;&nbsp; worker &nbsp;&mdash;&nbsp; private, Cloud Tasks only"]
+    subgraph wrk ["Cloud Run &mdash; worker &nbsp;(private: Cloud Tasks only)"]
+        direction TB
         worker["<b>worker.py</b><br/>POST /tasks/run-pipeline"]
-        subgraph pipe ["gemini_agent.run_pipeline &nbsp;&mdash;&nbsp; steps 1&middot;2&middot;4 call the model via adk_agents.py (ADK LlmAgent + InMemoryRunner)"]
-            direction TB
-            p1["<b>1 &middot; plan</b> &nbsp;&mdash;&nbsp; Gemini"]
-            p2["<b>2 &middot; triage</b> &nbsp;&mdash;&nbsp; Gemma"]
-            p3["<b>3 &middot; analyze</b> &nbsp;&mdash;&nbsp; analysis_engine/ &nbsp;&middot;&nbsp; deterministic, no AI"]
-            p4["<b>4 &middot; explain</b> &nbsp;&mdash;&nbsp; Gemini"]
-            p1 --> p2 --> p3 --> p4
-        end
-        worker --> p1
+        p1["<b>1. plan</b><br/>Gemini"]
+        p2["<b>2. triage</b><br/>Gemma"]
+        p3["<b>3. analyze</b><br/>analysis_engine/ &nbsp;(no AI)"]
+        p4["<b>4. explain</b><br/>Gemini"]
+        worker --> p1 --> p2 --> p3 --> p4
     end
 
-    fs[("Firestore &nbsp;&middot;&nbsp; job doc<br/>status &middot; progress &middot; result")]
+    adk["<b>adk_agents.py</b><br/>ADK LlmAgent + InMemoryRunner"]
+    fs[("Firestore &mdash; job doc<br/>status, progress, result")]
 
-    client -->|"POST /jobs &nbsp;&rarr;&nbsp; job_id"| api
-    client -->|"GET /jobs/{id} &nbsp;&middot;&nbsp; poll"| api
+    client -->|"POST /jobs &nbsp;&middot;&nbsp; GET /jobs/{id} (poll)"| api
+    api -->|"job_id, status, result"| client
     api -->|"enqueue"| queue
-    queue -->|"HTTP push &nbsp;&middot;&nbsp; OIDC"| worker
-    api -->|"create / read job"| fs
-    p4 -->|"progress + result,<br/>after every step"| fs
+    queue -->|"HTTP push, OIDC"| worker
+    api <-->|"create / read"| fs
+    p4 -->|"progress + result<br/>(every step)"| fs
+    p2 -.->|"steps 1, 2, 4"| adk
 ```
 
 Two Cloud Run services, one Firestore collection, one Cloud Tasks queue.
