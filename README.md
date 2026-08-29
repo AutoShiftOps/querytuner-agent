@@ -28,54 +28,46 @@ Application Default Credentials, the more "native GCP" of the two). See
 
 ## Architecture
 
-```
-                    ┌─────────────────────────────────────────────┐
-  POST /jobs        │  main.py — public API (Cloud Run, public)    │
-  ───────────────►  │  • validates input, creates Firestore job    │
-                     │  • enqueues a Cloud Tasks push task          │
-  ◄───────────────  │  • returns {job_id} immediately               │
-  {job_id}           └───────────────────┬───────────────────────────┘
-                                          │ HTTP push (OIDC-authenticated)
-                                          ▼
-                     ┌─────────────────────────────────────────────┐
-                     │  worker.py — pipeline runner (Cloud Run,     │
-                     │  no public invoker — Cloud Tasks' service    │
-                     │  account only)                               │
-                     │  POST /tasks/run-pipeline {job_id}            │
-                     └───────────────────┬───────────────────────────┘
-                                          │
-                                          ▼
-                     ┌─────────────────────────────────────────────┐
-                     │  gemini_agent.py — run_pipeline(job_id)      │
-                     │                                               │
-                     │  1. plan     — Gemini (cheap model, best-     │
-                     │                effort strategy rationale)     │
-                     │  2. triage   — Gemma, priority per query,     │
-                     │                BEFORE the real analysis pass  │
-                     │  3. analyze  — analysis_engine/ (real         │
-                     │                heuristics + schema/EXPLAIN    │
-                     │                cross-ref, zero AI calls)      │
-                     │  4. explain  — Gemini, executive summary       │
-                     │                weighted by triage priority     │
-                     │                                               │
-                     │  steps 1/2/4 all go through adk_agents.py —   │
-                     │  a real ADK LlmAgent + InMemoryRunner per      │
-                     │  call, not a raw SDK call (see adk_agents.py)  │
-                     │                                               │
-                     │  progress written to Firestore after every    │
-                     │  step, not just at the end                    │
-                     └───────────────────┬───────────────────────────┘
-                                          │
-                                          ▼
-                     ┌─────────────────────────────────────────────┐
-                     │  Firestore — job doc: status, progress,      │
-                     │  plan/triage/analysis/explanation, result     │
-                     └─────────────────────────────────────────────┘
-                                          ▲
-  GET /jobs/{id}     ┌─────────────────────────────────────────────┐
-  ───────────────►   │  main.py polls the same Firestore doc         │
-  ◄───────────────   └─────────────────────────────────────────────┘
-  {status, progress, result}
+```mermaid
+flowchart TD
+    client(["Client"])
+
+    subgraph pub ["Cloud Run · public"]
+        api["<b>main.py</b> — public API<br/>• validate input<br/>• create Firestore job doc<br/>• enqueue Cloud Tasks task<br/>• return job_id immediately"]
+    end
+
+    queue[["Cloud Tasks queue"]]
+
+    subgraph priv ["Cloud Run · no public invoker — Cloud Tasks service account only"]
+        worker["<b>worker.py</b><br/>POST /tasks/run-pipeline {job_id}"]
+        subgraph pipe ["gemini_agent.run_pipeline(job_id)"]
+            direction TB
+            p1["1 · plan — Gemini<br/>best-effort strategy rationale"]
+            p2["2 · triage — Gemma<br/>priority per query, BEFORE the real analysis pass"]
+            p3["3 · analyze — analysis_engine/<br/>heuristics + schema/EXPLAIN cross-ref · zero AI calls"]
+            p4["4 · explain — Gemini<br/>executive summary weighted by triage priority"]
+            p1 --> p2 --> p3 --> p4
+        end
+        worker --> pipe
+    end
+
+    adk["<b>adk_agents.py</b><br/>real ADK LlmAgent + InMemoryRunner per call<br/>(not a raw SDK call)"]
+    fs[("Firestore — job doc<br/>status · progress · plan / triage / analysis / explanation · result")]
+
+    client -->|"POST /jobs"| api
+    api -->|"job_id (immediately)"| client
+    api -->|"create job"| fs
+    api -->|"enqueue"| queue
+    queue -->|"HTTP push · OIDC-authenticated"| worker
+
+    p1 -->|"via"| adk
+    p2 -->|"via"| adk
+    p4 -->|"via"| adk
+
+    pipe -->|"progress written after every step"| fs
+
+    client -->|"GET /jobs/{id}"| api
+    fs -->|"status, progress, result"| api
 ```
 
 Two Cloud Run services, one Firestore collection, one Cloud Tasks queue.
@@ -298,9 +290,9 @@ gh repo create <your-username>/querytuner-agent --public --source=. --push
 ```
 
 Nothing in this project needs to stay private — `.env.example` has no
-real secrets, `.env` itself is `.gitignore`d (add one with `.env`,
-`__pycache__/`, `*.pyc` if it isn't present), and every dependency is a
-public PyPI package pinned to a real version.
+real secrets, `.env` (and `__pycache__/`, virtualenvs, etc.) are already
+in `.gitignore`, the code is MIT-licensed (`LICENSE`), and every
+dependency is a public PyPI package pinned to a real version.
 
 See `SUBMISSION.md` for the written features/tech/learnings summary the
 submission form asks for — it's ready to paste in or link to as-is.
@@ -372,3 +364,9 @@ submission's hosted-URL and demo video requirements are met.
 6. Point `streamlit_app.py` at that URL (`API_BASE_URL=<deployed url>
    streamlit run streamlit_app.py`) and use the browser UI — not curl —
    for the submission's demo video.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE). The vendored `analysis_engine/` is from
+[AutoShiftOps/querytuner](https://github.com/AutoShiftOps/querytuner),
+the same project.

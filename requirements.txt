@@ -1,6 +1,8 @@
-fastapi==0.115.6
+# fastapi/pydantic lower bounds are set by google-adk 2.8.0
+# (fastapi>=0.133,<1 and pydantic>=2.12,<3) — do not pin below those.
+fastapi==0.141.1
 uvicorn[standard]==0.34.0
-pydantic==2.10.5
+pydantic==2.13.5
 
 # Analysis engine (vendored from AutoShiftOps/querytuner) dependencies
 sqlparse==0.5.3
