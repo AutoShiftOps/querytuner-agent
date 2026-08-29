@@ -3,4 +3,4 @@
 # file via the Dockerfile) never pulls in Streamlit. Install these only
 # for running the local demo UI.
 streamlit==1.41.1
-requests==2.32.5
+requests==2.34.2

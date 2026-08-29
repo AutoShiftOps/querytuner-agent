@@ -29,45 +29,52 @@ Application Default Credentials, the more "native GCP" of the two). See
 ## Architecture
 
 ```mermaid
-flowchart TD
+flowchart TB
     client(["Client"])
 
-    subgraph pub ["Cloud Run · public"]
-        api["<b>main.py</b> — public API<br/>• validate input<br/>• create Firestore job doc<br/>• enqueue Cloud Tasks task<br/>• return job_id immediately"]
+    subgraph pub ["Cloud Run &nbsp;·&nbsp; public API"]
+        api["<b>main.py</b><br/>validate &nbsp;·&nbsp; create job &nbsp;·&nbsp; enqueue &nbsp;·&nbsp; return job_id"]
     end
 
     queue[["Cloud Tasks queue"]]
 
-    subgraph priv ["Cloud Run · no public invoker — Cloud Tasks service account only"]
-        worker["<b>worker.py</b><br/>POST /tasks/run-pipeline {job_id}"]
+    subgraph wrk ["Cloud Run &nbsp;·&nbsp; worker &nbsp;—&nbsp; no public invoker (Cloud Tasks SA only)"]
+        worker["<b>worker.py</b> &nbsp;·&nbsp; POST /tasks/run-pipeline"]
         subgraph pipe ["gemini_agent.run_pipeline(job_id)"]
             direction TB
-            p1["1 · plan — Gemini<br/>best-effort strategy rationale"]
-            p2["2 · triage — Gemma<br/>priority per query, BEFORE the real analysis pass"]
-            p3["3 · analyze — analysis_engine/<br/>heuristics + schema/EXPLAIN cross-ref · zero AI calls"]
-            p4["4 · explain — Gemini<br/>executive summary weighted by triage priority"]
+            p1["<b>1 · plan</b> &nbsp;—&nbsp; Gemini"]
+            p2["<b>2 · triage</b> &nbsp;—&nbsp; Gemma"]
+            p3["<b>3 · analyze</b> &nbsp;—&nbsp; analysis_engine/<br/>heuristics + EXPLAIN cross-ref &nbsp;·&nbsp; no AI"]
+            p4["<b>4 · explain</b> &nbsp;—&nbsp; Gemini"]
             p1 --> p2 --> p3 --> p4
         end
-        worker --> pipe
+        adk["<b>adk_agents.py</b><br/>ADK LlmAgent + InMemoryRunner"]
+        worker --> p1
+        p1 -. via .-> adk
+        p2 -. via .-> adk
+        p4 -. via .-> adk
     end
 
-    adk["<b>adk_agents.py</b><br/>real ADK LlmAgent + InMemoryRunner per call<br/>(not a raw SDK call)"]
-    fs[("Firestore — job doc<br/>status · progress · plan / triage / analysis / explanation · result")]
+    fs[("Firestore &nbsp;·&nbsp; job doc<br/>status · progress · result")]
 
-    client -->|"POST /jobs"| api
-    api -->|"job_id (immediately)"| client
-    api -->|"create job"| fs
-    api -->|"enqueue"| queue
-    queue -->|"HTTP push · OIDC-authenticated"| worker
+    client -- "POST /jobs &nbsp;·&nbsp; GET /jobs/{id} (poll)" --> api
+    api -- "job_id → status → result" --> client
+    api -- "enqueue" --> queue
+    queue -- "HTTP push &nbsp;·&nbsp; OIDC auth" --> worker
+    api -- "create / read job" --> fs
+    p4 -- "progress + result, after every step" --> fs
 
-    p1 -->|"via"| adk
-    p2 -->|"via"| adk
-    p4 -->|"via"| adk
-
-    pipe -->|"progress written after every step"| fs
-
-    client -->|"GET /jobs/{id}"| api
-    fs -->|"status, progress, result"| api
+    classDef service fill:#E8F0FE,stroke:#1A73E8,color:#202124
+    classDef managed fill:#FEF7E0,stroke:#F9AB00,color:#202124
+    classDef ai fill:#E6F4EA,stroke:#188038,color:#202124
+    classDef plain fill:#F1F3F4,stroke:#5F6368,color:#202124
+    class api,worker service
+    class queue,fs managed
+    class adk,p1,p2,p4 ai
+    class p3,client plain
+    style pub fill:#F8FAFF,stroke:#C6DAFC
+    style wrk fill:#FFFDF5,stroke:#FDE293
+    style pipe fill:#FFFFFF,stroke:#DADCE0
 ```
 
 Two Cloud Run services, one Firestore collection, one Cloud Tasks queue.
@@ -191,6 +198,77 @@ query and batch mode submit, poll, and render a complete result with
 zero exceptions, against a real `DRY_RUN=true` API instance — the same
 discipline used throughout this README, not just "should work."
 
+## One-time Google Cloud Console + Firebase setup
+
+Everything below "Deploying" is `gcloud` commands, which assume a project
+already exists, billing is on, and the right APIs are enabled. If you're
+starting from nothing, do this once first — all via the browser console,
+no CLI needed until the actual deploy step.
+
+1. **Create (or pick) a GCP project.** [console.cloud.google.com](https://console.cloud.google.com)
+   → the project dropdown (top left) → **New Project**. Note the
+   **Project ID** (not the display name) — that's the `$PROJECT` value
+   every `gcloud` command below uses.
+2. **Enable billing.** Navigation menu → **Billing** → link a billing
+   account to the project. Cloud Run, Cloud Tasks, and Firestore all have
+   an always-free monthly tier that comfortably covers hackathon-scale
+   testing, but the project needs a billing account attached to use them
+   at all — no charge for staying under the free tier.
+3. **Enable the APIs this project needs.** Navigation menu → **APIs &
+   Services** → **Library**, search for and enable each of:
+   - Cloud Run Admin API
+   - Cloud Tasks API
+   - Cloud Firestore API
+   - Cloud Build API (used by `gcloud builds submit`)
+   - Artifact Registry API (where that build's image is stored)
+   - Vertex AI API — only if you're using the Vertex AI auth path below
+     instead of a Gemini API key
+
+   (Equivalent one-liner once you have `gcloud` installed and authenticated:
+   `gcloud services enable run.googleapis.com cloudtasks.googleapis.com firestore.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com`.)
+4. **Create the Firestore database — via Firebase console.** Firestore is
+   the same database whether you provision it from the GCP console, the
+   Firebase console, or `gcloud firestore databases create` (step 2 of
+   "Deploying" below) — pick one, not all three. The Firebase console is
+   the nicest for a hackathon: it gives you a live, browsable data viewer
+   for free, which is a good visual for the demo video (job documents
+   updating in real time as the pipeline runs).
+   - Go to [console.firebase.google.com](https://console.firebase.google.com) → **Add project** → choose
+     **"Add Firebase to an existing GCP project"** and pick the project
+     from step 1 (this just attaches Firebase's tooling to the same
+     project — it does not create a second project).
+   - Left sidebar → **Build** → **Firestore Database** → **Create
+     database**.
+   - Choose **Native mode** (not Datastore mode — the app's
+     `google-cloud-firestore` client and its `firestore_store.py` usage
+     here assume Native mode).
+   - Pick a region close to wherever you'll deploy Cloud Run (e.g.
+     `us-central1`) — this becomes the same `$REGION` used everywhere
+     below, and can't be changed later without recreating the database.
+   - Leave security rules on the default (locked) setting — nothing in
+     this project's Firestore access goes through client-side Firebase
+     SDKs or rules; `firestore_store.py` talks to it server-side via
+     `google-cloud-firestore` and IAM (`roles/datastore.user`), which
+     rules don't gate.
+   - Once created, **Firestore Database → Data** in that same console is
+     where you can watch `queryagent_jobs` documents appear and update
+     live while a job runs — worth pulling up in a second browser tab
+     during the demo video.
+5. **A Gemini API key** (if using the API-key auth path rather than
+   Vertex AI): [aistudio.google.com/apikey](https://aistudio.google.com/apikey) → **Create API key** → pick
+   the same project from step 1 so usage is billed/quota-tracked
+   together. No separate enablement needed for this path.
+6. **Install and authenticate the `gcloud` CLI**, needed for every
+   command in "Deploying" below: [cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install),
+   then:
+   ```bash
+   gcloud init                      # picks/creates the project + default region
+   gcloud auth application-default login   # so local tools using ADC (e.g. testing Vertex AI mode locally) also authenticate
+   ```
+
+With that done, `PROJECT` and `REGION` below are just the values you
+picked in steps 1 and 4.
+
 ## Deploying to Cloud Run + Cloud Tasks
 
 ```bash
@@ -200,7 +278,8 @@ REGION=us-central1
 # 1. Build once, push once, deploy from the same image twice.
 gcloud builds submit --tag gcr.io/$PROJECT/queryagent
 
-# 2. Firestore (Native mode, if not already provisioned).
+# 2. Firestore (Native mode, if not already provisioned via the
+#    Firebase console above — skip this line if it already exists).
 gcloud firestore databases create --location=$REGION
 
 # 3. A dedicated service account Cloud Tasks uses to authenticate to
@@ -356,9 +435,12 @@ submission's hosted-URL and demo video requirements are met.
    locally with the same `.env` (was not build-tested in this sandbox —
    see above) — confirm the image builds and both `/healthz` endpoints
    respond.
-4. Follow "Deploying to Cloud Run + Cloud Tasks" above for a real GCP
-   project; use the Vertex AI variant instead of `GEMINI_API_KEY` for the
-   strongest native-GCP story if pursuing that for judging.
+4. If you don't already have a GCP project set up for this, do "One-time
+   Google Cloud Console + Firebase setup" above first (project, billing,
+   APIs, Firestore via the Firebase console). Then follow "Deploying to
+   Cloud Run + Cloud Tasks" for the actual deploy; use the Vertex AI
+   variant instead of `GEMINI_API_KEY` for the strongest native-GCP story
+   if pursuing that for judging.
 5. Confirm `GET /jobs/{job_id}` polling works end-to-end against the
    deployed URL.
 6. Point `streamlit_app.py` at that URL (`API_BASE_URL=<deployed url>
